@@ -13,6 +13,12 @@ implementation("org.evoleq.toolkit:toolkit-actions:0.2.0")
 These are illustrative coordinates until Central actually validates and
 publishes an artifact. `toolkit-serialization-ksp-fixture` is test-only.
 
+## Automated releases
+
+The SemVer workflow calls Central publishing directly after creating a new CI-verified tag and GitHub release. The Portal uses AUTOMATIC mode. The deployment receipt is attached to the GitHub release before polling; a separate publication record is attached after PUBLISHED and a remote-only Gradle consumer check. No new release means no upload. Configure the maven-central environment without required reviewers if fully unattended publishing is desired.
+
+For recovery, dispatch Central publishing with the existing tag and, if needed, its Portal deployment UUID. A recorded deployment is reused; already-visible versions are not uploaded again. If the upload succeeded but its receipt could not be attached, recover the UUID from the workflow log or Portal before retrying. Never blindly retry an ambiguous upload. The automated path requires tags containing the new scripts and smoke configuration; historical tags require the original workflow or a separately reviewed recovery procedure.
+
 ## Release gates
 
 1. Verify the DNS ownership challenge for `evoleq.org` with Sonatype and
@@ -33,8 +39,7 @@ publishes an artifact. `toolkit-serialization-ksp-fixture` is test-only.
 6. Wait for a new annotated `vX.Y.Z` tag created by the existing
    `.github/workflows/semver-tags.yml` after the exact master CI passes.
    Do not use old JitPack-style versions beginning with `v` in Central.
-7. Manually run `Maven Central staging` from the default branch with that
-   tag. It verifies the tag's reachability from master and the successful
+7. The SemVer job calls `Maven Central publishing` with that tag. It verifies the tag's reachability from master and the successful
    **push CI for its exact commit** before any credentialed build starts.
 
 The release workflow builds KMP root/JVM/JS/Wasm/Android/Linux variants on
@@ -44,10 +49,7 @@ checks transitive internal POM coordinates, checks signatures and required
 POM fields, adds required checksums, and uploads **one ZIP** to Sonatype's
 Central Publisher Portal API.
 
-The deployment uses `USER_MANAGED` mode: even after upload, Sonatype
-validates it and **a maintainer must explicitly publish it** from the Portal.
-An upload response is **not** proof that it is live on Maven Central.
-There is no credentialed release on PRs or new tags automatically.
+The deployment uses `AUTOMATIC` mode: Sonatype validates and publishes it. An upload response is not proof that it is live. No credentialed release runs on PRs; only the trusted release chain or explicit recovery can invoke publishing.
 
 ## Local smoke
 
