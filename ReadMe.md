@@ -15,9 +15,7 @@ ToolKit is being reworked as a **small, law-aware foundation** for compositional
 
 ## Maven Central release path
 
-The separately gated **Maven Central staging workflow** produces signed,
-platform-complete distributions under `org.evoleq.toolkit:toolkit-*:VERSION`
-and submits them to Sonatype for **manual validation/publication**.
+The **Maven Central publishing workflow** follows each new CI-verified SemVer release, produces signed, platform-complete distributions under `org.evoleq.toolkit:toolkit-*:VERSION` and submits them to Sonatype for automatic validation and publication. Remote consumer evidence is recorded separately.
 The source release alone does not establish that these artifacts are live.
 See [Central publishing](docs/CENTRAL-PUBLISHING.md) for requirements,
 release provenance, the operator checklist and post-release verification.
