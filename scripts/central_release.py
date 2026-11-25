@@ -89,12 +89,15 @@ def wait(deployment, tag, sha):
         print("Central deployment state:", state, flush=True)
         if state == "PUBLISHED":
             evidence = receipt(deployment, tag, sha)
+            expected = {"pkg:maven/" + GROUP + "/" + name + "@" + tag[1:] for name in modules()}
+            if not expected.issubset(set(result.get("purls", []))):
+                raise RuntimeError("Portal deployment is missing expected module coordinates")
             evidence.update(status=state, consumerVerified=False)
             write(tag + "-central-publication.json", evidence)
             return
-        if state in ("FAILED", "VALIDATED"):
+        if state == "FAILED":
             raise RuntimeError("Portal deployment requires operator review: " + state)
-        if state not in ("PENDING", "VALIDATING", "PUBLISHING"):
+        if state not in ("PENDING", "VALIDATING", "VALIDATED", "PUBLISHING"):
             raise RuntimeError("Unknown Portal deployment state: " + state)
         time.sleep(30)
     raise TimeoutError("Central publication timed out; resume with existing deployment ID")
