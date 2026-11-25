@@ -1,17 +1,31 @@
-name: Maven Central staging
+name: Maven Central publishing
 
 # Deliberate authorization: DNS verification, license and Portal credentials
-# are human-controlled prerequisites. No releases from PRs or tag pushes.
+# are human-controlled prerequisites. Called directly by SemVer or manually.
 on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      deployment_id:
+        type: string
+        required: false
+        default: ''
   workflow_dispatch:
     inputs:
       tag:
         description: "Existing CI-verified annotated release tag (vX.Y.Z)"
         type: string
         required: true
+      deployment_id:
+        description: 'Existing Portal deployment UUID for recovery; leave empty for new upload'
+        type: string
+        required: false
+        default: ''
 
 permissions:
-  contents: read
+  contents: write
   actions: read
 
 concurrency:
@@ -25,6 +39,7 @@ jobs:
     outputs:
       sha: ${{ steps.release.outputs.sha }}
       version: ${{ steps.release.outputs.version }}
+      existing: ${{ steps.release.outputs.existing }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,10 +78,13 @@ jobs:
           python scripts/release.py validate
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          gh release view "$TAG" --json assets > /tmp/release-assets.json
+          echo "existing=$(jq -r --arg name "$TAG-central-deployment.json" 'any(.assets[]; .name == $name)' /tmp/release-assets.json)" >> "$GITHUB_OUTPUT"
 
   stage:
     name: Build and sign ${{ matrix.host }} publications
     needs: verify
+    if: ${{ inputs.deployment_id == '' && needs.verify.outputs.existing == 'false' }}
     strategy:
       fail-fast: false
       matrix:
@@ -124,7 +142,7 @@ jobs:
           retention-days: 7
 
   deploy:
-    name: Validate complete bundle and upload for manual approval
+    name: Validate complete bundle and upload automatically
     needs: [verify, stage]
     runs-on: ubuntu-latest
     environment: maven-central
@@ -159,9 +177,11 @@ jobs:
           name: toolkit-central-bundle-${{ inputs.tag }}
           path: build/release/central-bundle.zip
           retention-days: 14
-      - name: Upload to Sonatype Central Portal (USER_MANAGED; do not auto-publish)
+      - name: Upload to Sonatype Central Portal (AUTOMATIC)
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           RELEASE_VERSION: ${{ needs.verify.outputs.version }}
@@ -169,10 +189,62 @@ jobs:
           set -euo pipefail
           : "${CENTRAL_USERNAME:?Missing Sonatype Portal token username}"
           : "${CENTRAL_PASSWORD:?Missing Sonatype Portal token password}"
+          # Do not re-upload immutable versions already present on Central.
+          python scripts/central_release.py guard "$RELEASE_VERSION"
           AUTH="$(printf '%s:%s' "$CENTRAL_USERNAME" "$CENTRAL_PASSWORD" | base64 | tr -d '\r\n')"
           DEPLOYMENT_ID="$(curl --fail-with-body --silent --show-error \
             --header "Authorization: Bearer $AUTH" \
             --form "bundle=@build/release/central-bundle.zip;type=application/octet-stream" \
-            "https://central.sonatype.com/api/v1/publisher/upload?publishingType=USER_MANAGED&name=toolkit-$RELEASE_VERSION")"
+            "https://central.sonatype.com/api/v1/publisher/upload?publishingType=AUTOMATIC&name=toolkit-$RELEASE_VERSION")"
           echo "Central Portal deployment ID: $DEPLOYMENT_ID"
-          echo "Validate deployment in Sonatype UI, then publish explicitly."
+          python scripts/central_release.py receipt "$DEPLOYMENT_ID" "$TAG" "${{ needs.verify.outputs.sha }}"
+          gh release upload "$TAG" "$TAG-central-deployment.json"
+
+  confirm:
+    name: Confirm Portal publication and remote consumer
+    needs: [verify, stage, deploy]
+    if: ${{ always() && needs.verify.result == 'success' && (needs.deploy.result == 'success' || (needs.stage.result == 'skipped' && needs.deploy.result == 'skipped')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: maven-central
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.2.1'
+      - name: Resolve deployment receipt and await PUBLISHED
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          RELEASE_SHA: ${{ needs.verify.outputs.sha }}
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DEPLOYMENT_ID" ]]; then
+            gh release download "$TAG" --pattern "$TAG-central-deployment.json"
+            DEPLOYMENT_ID="$(jq -er .deploymentId "$TAG-central-deployment.json")"
+          fi
+          python scripts/central_release.py wait "$DEPLOYMENT_ID" "$TAG" "$RELEASE_SHA"
+      - name: Resolve every module from Central and compile independent consumer
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          python scripts/central_release.py remote "$VERSION"
+          gradle --no-daemon --refresh-dependencies -p central-publishing-smoke -PcentralRemote=true -PtoolkitVersion="$VERSION" compileKotlin verifyAllModules
+      - name: Attach verified publishing evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          python scripts/central_release.py complete "$TAG"
+          gh release upload "$TAG" "$TAG-central-publication.json" --clobber
