@@ -20,13 +20,12 @@ val allModules by configurations.creating {
     }
 }
 val manifest = groovy.json.JsonSlurper().parse(file("../compatibility/modules.json")) as Map<*, *>
-val modules = manifest["modules"] as Map<*, *>
-dependencies {
-    modules.forEach { (name, value) ->
-        if ((value as Map<*, *>)["publication"] != "none") {
-            add(allModules.name, "org.evoleq.toolkit:$name:$toolkitVersion")
-        }
-    }
+val publishedModuleNames = (manifest["modules"] as Map<*, *>).entries
+    .filter { (_, value) -> (value as Map<*, *>)["publication"] != "none" }
+    .map { (name, _) -> name as String }
+check(publishedModuleNames.isNotEmpty())
+publishedModuleNames.forEach { moduleName ->
+    dependencies.add(allModules.name, "org.evoleq.toolkit:$moduleName:$toolkitVersion")
 }
 tasks.register("verifyAllModules") {
     doLast {
