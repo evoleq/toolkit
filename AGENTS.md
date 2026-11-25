@@ -14,3 +14,7 @@ The public library is **Evoleq ToolKit**. PR #28 established a breaking namespac
 - Preserve Stokes branding and the mathematics.
 
 See `docs/TOOLKIT-MIGRATION.md` and `docs/RELEASE-VERSIONING.md`.
+
+## Preserve History Before Consolidation
+
+**Invariant: No destructive consolidation without verified historical preservation.** Before deleting branches, rebasing, squashing, force-pushing or otherwise replacing historical development refs, capture all affected original refs and their reachable objects, relevant PR/issue discussions and available CI evidence. Use `scripts/archive-history.sh OWNER/REPO /absolute/archive/directory` before changing refs; verify the resulting bundle by restoring it, checking refs and checksums, and store it in durable access-controlled storage outside the library repository. Preserve local-only work separately; the script snapshots remote history, not uncommitted work or local reflogs. Record snapshot scope, missing evidence, and storage location in the consolidation issue. Recheck affected refs against the snapshot immediately before mutation; if they changed, archive again. Missing or unverified preservation blocks destructive cleanup. Never infer historical merge edges from patch equivalence. See `docs/HISTORY-PRESERVATION.md` and #36. This rule applies to humans and agents; transfer to ai-command when available.
