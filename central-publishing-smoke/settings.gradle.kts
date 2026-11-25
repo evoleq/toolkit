@@ -8,7 +8,9 @@ pluginManagement {
 }
 dependencyResolutionManagement {
     repositories {
-        maven(url = uri("../build/central-staging"))
+        if (!providers.gradleProperty("centralRemote").map { it.toBoolean() }.getOrElse(false)) {
+            maven(url = uri("../build/central-staging"))
+        }
         google()
         mavenCentral()
     }
