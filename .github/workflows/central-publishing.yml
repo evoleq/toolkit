@@ -74,6 +74,7 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=push&head_sha=$SHA&status=success&per_page=100" |
             python -c 'import json, os, sys; runs=json.load(sys.stdin)["workflow_runs"]; assert any(r["head_sha"] == os.environ["SHA"] and r["head_branch"] == "master" and r["conclusion"] == "success" for r in runs), "No successful master push CI at this exact commit"'
           git checkout --detach "$SHA"
+          test -f scripts/central_release.py || { echo "Historical tag: use separately reviewed recovery"; exit 1; }
           python -m unittest discover -s scripts/tests -v
           python scripts/release.py validate
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
@@ -190,9 +191,11 @@ jobs:
           : "${CENTRAL_USERNAME:?Missing Sonatype Portal token username}"
           : "${CENTRAL_PASSWORD:?Missing Sonatype Portal token password}"
           # Do not re-upload immutable versions already present on Central.
+          gh release view "$TAG" --json assets | jq -e --arg name "$TAG-central-deployment.json" 'all(.assets[]; .name != $name)' >/dev/null
           python scripts/central_release.py guard "$RELEASE_VERSION"
           AUTH="$(printf '%s:%s' "$CENTRAL_USERNAME" "$CENTRAL_PASSWORD" | base64 | tr -d '\r\n')"
-          DEPLOYMENT_ID="$(curl --fail-with-body --silent --show-error \
+          echo "::add-mask::$AUTH"
+          DEPLOYMENT_ID="$(curl --connect-timeout 30 --max-time 600 --fail --silent --show-error \
             --header "Authorization: Bearer $AUTH" \
             --form "bundle=@build/release/central-bundle.zip;type=application/octet-stream" \
             "https://central.sonatype.com/api/v1/publisher/upload?publishingType=AUTOMATIC&name=toolkit-$RELEASE_VERSION")"
@@ -233,6 +236,9 @@ jobs:
             DEPLOYMENT_ID="$(jq -er .deploymentId "$TAG-central-deployment.json")"
           fi
           python scripts/central_release.py wait "$DEPLOYMENT_ID" "$TAG" "$RELEASE_SHA"
+          if ! gh release view "$TAG" --json assets | jq -e --arg name "$TAG-central-deployment.json" 'any(.assets[]; .name == $name)' >/dev/null; then
+            gh release upload "$TAG" "$TAG-central-deployment.json"
+          fi
       - name: Resolve every module from Central and compile independent consumer
         env:
           VERSION: ${{ needs.verify.outputs.version }}
