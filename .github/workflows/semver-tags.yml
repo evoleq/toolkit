@@ -15,6 +15,8 @@ concurrency:
 
 jobs:
   tag:
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
     if: >-
       ${{ github.event.workflow_run.conclusion == 'success' &&
           github.event.workflow_run.head_branch == 'master' &&
@@ -28,6 +30,7 @@ jobs:
           fetch-depth: 0
 
       - name: Validate release contracts and create compatibility record
+        id: release
         env:
           TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
           CI_RUN: ${{ github.event.workflow_run.id }}
@@ -64,5 +67,17 @@ jobs:
             --output "build/$next-compatibility.json"
           gh release create "$next" "build/$next-compatibility.json" \
             --title "ToolKit $next" \
-            --notes "CI-verified source release. See the attached compatibility record for exact module versions and evidence. This workflow does not publish Maven artifacts."
+            --notes "CI-verified source release. See the attached compatibility record for exact module versions and evidence. Maven Central publication is tracked separately; a source release does not prove artifact availability."
+          echo "tag=$next" >> "$GITHUB_OUTPUT"
           echo "Tagged $next at $TESTED_SHA and attached compatibility record."
+
+  publish-central:
+    needs: tag
+    if: ${{ needs.tag.outputs.tag != '' }}
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/central-publishing.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
+    secrets: inherit
